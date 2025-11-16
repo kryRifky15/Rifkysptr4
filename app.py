@@ -3,9 +3,7 @@ import sqlite3
 from datetime import datetime
 import pandas as pd
 
-# ---------------------------
 # DATABASE HELPERS
-# ---------------------------
 DB_PATH = "database.db"
 
 def get_connection():
@@ -63,9 +61,7 @@ def create_db():
     conn.commit()
     conn.close()
 
-# ---------------------------
 # USER / AUTH FUNCTIONS
-# ---------------------------
 def add_user(username, password, role="student"):
     try:
         conn = get_connection()
@@ -112,9 +108,7 @@ def list_users():
     conn.close()
     return rows
 
-# ---------------------------
 # MATERIALS FUNCTIONS (NEW)
-# ---------------------------
 def add_material(title, link, created_by):
     conn = get_connection()
     c = conn.cursor()
@@ -140,9 +134,7 @@ def delete_material(material_id):
     conn.commit()
     conn.close()
 
-# ---------------------------
 # TASKS & ANSWERS FUNCTIONS
-# ---------------------------
 def add_task(title, description, correct_answer, created_by, deadline=None):
     conn = get_connection()
     c = conn.cursor()
@@ -230,9 +222,7 @@ def get_all_answers():
     conn.close()
     return rows
 
-# ---------------------------
 # UI: PAGES
-# ---------------------------
 def login_page():
     st.title("🔐 Login E-Learning")
     st.write("Masuk dengan akun Anda")
@@ -573,9 +563,7 @@ def student_results_page(user):
     else:
         st.info("Anda belum mengerjakan tugas apapun")
 
-# ---------------------------
 # MAIN APP
-# ---------------------------
 def main():
     st.set_page_config(page_title="E-Learning System", page_icon="🎓", layout="wide")
     
