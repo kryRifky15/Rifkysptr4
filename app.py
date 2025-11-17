@@ -4,6 +4,19 @@ from datetime import datetime
 import pandas as pd
 import json
 
+st.set_page_config(
+    page_title="E-Learning System",
+    page_icon="📘",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
+    }
+)
+
+
 # DATABASE HELPERS
 DB_PATH = "database.db"
 
