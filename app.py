@@ -612,39 +612,104 @@ def manage_users_admin_page():
                     st.error("Gagal membuat user")
 
 def manage_tasks_admin_page():
-    """Admin page to manage all tasks"""
+    """Admin page to manage all tasks, grouped by mata kuliah"""
     st.header("📝 Manajemen Tugas (Admin)")
     
-    tasks = get_all_tasks()
+    # Get all tasks
+    all_tasks = get_all_tasks()
+    if not all_tasks:
+        st.info("Belum ada tugas")
+        return
+        
+    # Extract unique mata_kuliah
+    mata_kuliah_list = sorted(list(set(task[3] for task in all_tasks)))
     
-    if tasks:
-        for t in tasks:
+    # Add selectbox for filtering by mata_kuliah
+    selected_mk = st.selectbox("Filter berdasarkan Mata Kuliah", ["Semua Mata Kuliah"] + mata_kuliah_list)
+    
+    # Filter tasks based on selection
+    if selected_mk == "Semua Mata Kuliah":
+        tasks_to_display = all_tasks
+    else:
+        tasks_to_display = [t for t in all_tasks if t[3] == selected_mk]
+    
+    if not tasks_to_display:
+        st.info(f"Tidak ada tugas untuk mata kuliah {selected_mk}")
+        return
+        
+    # Display tasks grouped by mata_kuliah if showing all
+    if selected_mk == "Semua Mata Kuliah":
+        # Group tasks by mata_kuliah
+        from collections import defaultdict
+        grouped_tasks = defaultdict(list)
+        for t in tasks_to_display:
+            grouped_tasks[t[3]].append(t)  # t[3] is mata_kuliah
+            
+        # Display each group
+        for mk, mk_tasks in grouped_tasks.items():
+            st.markdown("---")
+            st.subheader(f"📚 Mata Kuliah: {mk}")
+            
+            # Display tasks for this mata_kuliah with local index
+            for local_idx, t in enumerate(mk_tasks, 1):
+                tid, title, desc, mata_kuliah, target_jurusan, created_by, created_at, deadline = t
+                target_list = json.loads(target_jurusan)
+                with st.expander(f"📄 Tugas {local_idx}: {title}", expanded=False):  # Diubah di sini
+                    st.write(f"**Dibuat oleh:** {created_by}")
+                    st.write(f"**Target Jurusan:** {', '.join(target_list)}")
+                    if deadline:
+                        st.write(f"**Deadline:** {deadline}")
+                    st.caption(f"Dibuat pada {created_at}")
+                    with st.form(f"edit_task_{tid}"):
+                        new_title = st.text_input("Judul", value=title, key=f"title_all_{tid}")
+                        new_desc = st.text_area("Deskripsi", value=desc, key=f"desc_all_{tid}")
+                        new_deadline = st.date_input(
+                            "Deadline", 
+                            value=None if not deadline else datetime.fromisoformat(deadline).date(),
+                            key=f"deadline_all_{tid}"
+                        )
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            if st.form_submit_button("💾 Update", key=f"update_all_{tid}"):
+                                update_task(tid, new_title, new_desc, None, new_deadline.isoformat() if new_deadline else None)
+                                st.success("✅ Tugas berhasil diupdate")
+                                st.rerun()
+                        with col2:
+                            if st.form_submit_button("🗑️ Hapus", type="secondary", key=f"delete_all_{tid}"):
+                                delete_task(tid)
+                                st.success("✅ Tugas dihapus")
+                                st.rerun()
+    else:
+        # Display tasks for selected mata_kuliah with local index
+        st.subheader(f"📚 Tugas untuk Mata Kuliah: {selected_mk}")
+        for local_idx, t in enumerate(tasks_to_display, 1):
             tid, title, desc, mata_kuliah, target_jurusan, created_by, created_at, deadline = t
             target_list = json.loads(target_jurusan)
-            
-            with st.expander(f"📄 Tugas #{tid}: {title} ({mata_kuliah})", expanded=False):
+            with st.expander(f"📄 Tugas {local_idx}: {title}", expanded=False):  # Diubah di sini
                 st.write(f"**Dibuat oleh:** {created_by}")
                 st.write(f"**Target Jurusan:** {', '.join(target_list)}")
-                
+                if deadline:
+                    st.write(f"**Deadline:** {deadline}")
+                st.caption(f"Dibuat pada {created_at}")
                 with st.form(f"edit_task_{tid}"):
-                    new_title = st.text_input("Judul", value=title)
-                    new_desc = st.text_area("Deskripsi", value=desc)
-                    new_deadline = st.date_input("Deadline", value=None if not deadline else datetime.fromisoformat(deadline).date())
-                    
+                    new_title = st.text_input("Judul", value=title, key=f"title_sel_{tid}")
+                    new_desc = st.text_area("Deskripsi", value=desc, key=f"desc_sel_{tid}")
+                    new_deadline = st.date_input(
+                        "Deadline", 
+                        value=None if not deadline else datetime.fromisoformat(deadline).date(),
+                        key=f"deadline_sel_{tid}"
+                    )
                     col1, col2 = st.columns([3, 1])
                     with col1:
-                        if st.form_submit_button("💾 Update"):
+                        if st.form_submit_button("💾 Update", key=f"update_sel_{tid}"):
                             update_task(tid, new_title, new_desc, None, new_deadline.isoformat() if new_deadline else None)
                             st.success("✅ Tugas berhasil diupdate")
                             st.rerun()
-                    
                     with col2:
-                        if st.form_submit_button("🗑️ Hapus", type="secondary"):
+                        if st.form_submit_button("🗑️ Hapus", type="secondary", key=f"delete_sel_{tid}"):
                             delete_task(tid)
                             st.success("✅ Tugas dihapus")
                             st.rerun()
-    else:
-        st.info("Belum ada tugas")
 
 def manage_materials_admin_page():
     """Admin page to manage all materials"""
@@ -690,21 +755,15 @@ def view_all_answers_admin_page():
 def materials_page_lecturer(user):
     """Lecturer page to manage materials"""
     mata_kuliah = user[6]
-    
     st.header(f"📚 Materi Tambahan - {mata_kuliah}")
     
-    # Add new material
+    # Add new material (tidak berubah)
     with st.expander("➕ Tambah Materi Baru", expanded=False):
         with st.form("material_form"):
             title = st.text_input("Judul Materi")
             link = st.text_input("Link (YouTube/Google Drive/dll)")
-            
-            # Get available jurusan from lecturer's teaching assignment
-            # For simplicity, let lecturer input jurusan manually
             jurusan_input = st.text_input("Target Jurusan (pisahkan dengan koma, atau tulis 'Semua Jurusan')")
-            
             submitted = st.form_submit_button("💾 Simpan Materi")
-            
             if submitted:
                 if not title or not link or not jurusan_input:
                     st.error("Semua field harus diisi")
@@ -714,35 +773,30 @@ def materials_page_lecturer(user):
                         target_jurusan = ["Semua Jurusan"]
                     else:
                         target_jurusan = [j.strip() for j in jurusan_input.split(",")]
-                    
                     add_material(title, link, mata_kuliah, target_jurusan, user[4] or user[1])
                     st.success(f"✅ Materi '{title}' berhasil ditambahkan")
                     st.rerun()
     
-    # List materials
+    # List materials dengan index lokal per mata kuliah
     st.markdown("---")
     st.subheader("📖 Daftar Materi Saya")
     materials = get_all_materials_by_lecturer(mata_kuliah)
-    
     if materials:
-        for mat in materials:
+        # Gunakan enumerate untuk membuat index lokal yang dimulai dari 1
+        for local_idx, mat in enumerate(materials, 1):
             mat_id, title, link, _, target_jurusan, created_by, created_at = mat
             target_list = json.loads(target_jurusan)
-            
             col1, col2 = st.columns([4, 1])
-            
             with col1:
-                st.markdown(f"### 📌 {title}")
+                st.markdown(f"### 📌 #{local_idx}. {title}")
                 st.write(f"🔗 Link: [{link}]({link})")
                 st.write(f"🎯 Target: {', '.join(target_list)}")
                 st.caption(f"Dibuat pada {created_at}")
-            
             with col2:
                 if st.button("🗑️ Hapus", key=f"del_{mat_id}"):
                     delete_material(mat_id)
                     st.success("Materi dihapus")
                     st.rerun()
-            
             st.markdown("---")
     else:
         st.info("Belum ada materi")
@@ -750,20 +804,16 @@ def materials_page_lecturer(user):
 def manage_tasks_lecturer_page(user):
     """Lecturer page to manage tasks"""
     mata_kuliah = user[6]
-    
     st.header(f"📝 Manajemen Tugas - {mata_kuliah}")
     
-    # Add new task
+    # Add new task (tidak berubah)
     with st.expander("➕ Tambah Soal Baru", expanded=False):
         with st.form("task_form"):
             title = st.text_input("Judul Soal")
             desc = st.text_area("Deskripsi / Soal")
             deadline = st.date_input("Deadline (opsional)", value=None)
-            
             jurusan_input = st.text_input("Target Jurusan (pisahkan dengan koma, atau tulis 'Semua Jurusan')")
-            
             submitted = st.form_submit_button("💾 Simpan Soal")
-            
             if submitted:
                 if not title or not desc or not jurusan_input:
                     st.error("Judul, deskripsi, dan target jurusan harus diisi")
@@ -773,28 +823,46 @@ def manage_tasks_lecturer_page(user):
                         target_jurusan = ["Semua Jurusan"]
                     else:
                         target_jurusan = [j.strip() for j in jurusan_input.split(",")]
-                    
                     deadline_str = deadline.isoformat() if deadline else None
                     add_task(title, desc, mata_kuliah, target_jurusan, user[4] or user[1], deadline_str)
                     st.success(f"✅ Soal '{title}' berhasil disimpan")
                     st.rerun()
     
-    # List tasks
+    # List tasks dengan format yang dimodifikasi
     st.markdown("---")
     st.subheader("📚 Daftar Soal Saya")
     tasks = get_all_tasks_by_lecturer(mata_kuliah)
-    
     if tasks:
-        for t in tasks:
+        # Gunakan enumerate untuk membuat index lokal yang dimulai dari 1
+        for local_idx, t in enumerate(tasks, 1):
             tid, title, desc, _, target_jurusan, created_by, created_at, deadline = t
             target_list = json.loads(target_jurusan)
-            
-            with st.expander(f"📄 Soal {tid}: {title}", expanded=False):
+            with st.expander(f"📄 Soal {local_idx}: {title}", expanded=False):  # Diubah di sini
                 st.write(f"**Deskripsi:** {desc}")
                 st.write(f"**Target Jurusan:** {', '.join(target_list)}")
                 if deadline:
                     st.write(f"**Deadline:** {deadline}")
                 st.caption(f"Dibuat pada {created_at}")
+                # Form untuk edit/hapus tetap menggunakan ID asli dari database
+                with st.form(f"edit_task_{tid}"):
+                    new_title = st.text_input("Judul", value=title, key=f"title_{tid}")
+                    new_desc = st.text_area("Deskripsi", value=desc, key=f"desc_{tid}")
+                    new_deadline = st.date_input(
+                        "Deadline", 
+                        value=None if not deadline else datetime.fromisoformat(deadline).date(),
+                        key=f"deadline_{tid}"
+                    )
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        if st.form_submit_button("💾 Update", key=f"update_{tid}"):
+                            update_task(tid, new_title, new_desc, None, new_deadline.isoformat() if new_deadline else None)
+                            st.success("✅ Soal berhasil diupdate")
+                            st.rerun()
+                    with col2:
+                        if st.form_submit_button("🗑️ Hapus", type="secondary", key=f"delete_{tid}"):
+                            delete_task(tid)
+                            st.success("✅ Soal dihapus")
+                            st.rerun()
     else:
         st.info("Belum ada soal")
 
