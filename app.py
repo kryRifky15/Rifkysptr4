@@ -6,14 +6,18 @@ import json
 
 # DATABASE HELPERS
 DB_PATH = "database.db"
+FEEDBACK_DB_PATH = "feedback.db"  # Path untuk database feedback
 
 def get_connection():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
+# Fungsi koneksi untuk feedback database
+def get_feedback_connection():
+    return sqlite3.connect(FEEDBACK_DB_PATH, check_same_thread=False)
+
 def create_db():
     conn = get_connection()
     c = conn.cursor()
-    
     # USERS - Enhanced dengan nickname, jurusan, mata_kuliah
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -26,7 +30,6 @@ def create_db():
             mata_kuliah TEXT
         )
     """)
-    
     # TASKS - Enhanced dengan target_jurusan (JSON array)
     c.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
@@ -40,7 +43,6 @@ def create_db():
             deadline TEXT
         )
     """)
-    
     # ANSWERS - Enhanced dengan status (draft/submitted)
     c.execute("""
         CREATE TABLE IF NOT EXISTS answers (
@@ -58,7 +60,6 @@ def create_db():
             FOREIGN KEY(user_id) REFERENCES users(id)
         )
     """)
-    
     # MATERIALS - Enhanced dengan mata_kuliah dan target_jurusan
     c.execute("""
         CREATE TABLE IF NOT EXISTS materials (
@@ -71,9 +72,46 @@ def create_db():
             created_at TEXT
         )
     """)
-    
     conn.commit()
     conn.close()
+
+# ========== FEEDBACK DATABASE FUNCTIONS ==========
+def create_feedback_db():
+    """Create separate database for feedback"""
+    conn = get_feedback_connection()
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            role TEXT,
+            message TEXT,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def add_feedback(user_id, username, role, message):
+    """Add feedback to separate database"""
+    conn = get_feedback_connection()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO feedback(user_id, username, role, message, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, username, role, message, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+def get_all_feedback():
+    """Get all feedback for admin view"""
+    conn = get_feedback_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, user_id, username, role, message, created_at FROM feedback ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
 
 # ========== USER FUNCTIONS ==========
 def add_user(username, password, role="student", nickname="", jurusan="", mata_kuliah=""):
@@ -120,10 +158,8 @@ def update_user_info(user_id, username=None, nickname=None, jurusan=None, mata_k
     """Admin function to update user info"""
     conn = get_connection()
     c = conn.cursor()
-    
     updates = []
     params = []
-    
     if username:
         updates.append("username=?")
         params.append(username)
@@ -136,13 +172,11 @@ def update_user_info(user_id, username=None, nickname=None, jurusan=None, mata_k
     if mata_kuliah is not None:
         updates.append("mata_kuliah=?")
         params.append(mata_kuliah)
-    
     if updates:
         params.append(user_id)
         query = f"UPDATE users SET {', '.join(updates)} WHERE id=?"
         c.execute(query, params)
         conn.commit()
-    
     conn.close()
 
 def list_users():
@@ -184,14 +218,12 @@ def get_materials_by_mata_kuliah_jurusan(mata_kuliah, jurusan):
     """, (mata_kuliah,))
     rows = c.fetchall()
     conn.close()
-    
     # Filter by jurusan
     filtered = []
     for row in rows:
         target = json.loads(row[4])
         if jurusan in target or "Semua Jurusan" in target:
             filtered.append(row)
-    
     return filtered
 
 def get_all_materials_by_lecturer(mata_kuliah):
@@ -232,10 +264,8 @@ def update_material(material_id, title=None, link=None, target_jurusan=None):
     """Admin function to update material"""
     conn = get_connection()
     c = conn.cursor()
-    
     updates = []
     params = []
-    
     if title:
         updates.append("title=?")
         params.append(title)
@@ -245,13 +275,11 @@ def update_material(material_id, title=None, link=None, target_jurusan=None):
     if target_jurusan:
         updates.append("target_jurusan=?")
         params.append(json.dumps(target_jurusan))
-    
     if updates:
         params.append(material_id)
         query = f"UPDATE materials SET {', '.join(updates)} WHERE id=?"
         c.execute(query, params)
         conn.commit()
-    
     conn.close()
 
 # ========== TASKS FUNCTIONS ==========
@@ -277,14 +305,12 @@ def get_tasks_by_mata_kuliah_jurusan(mata_kuliah, jurusan):
     """, (mata_kuliah,))
     rows = c.fetchall()
     conn.close()
-    
     # Filter by jurusan
     filtered = []
     for row in rows:
         target = json.loads(row[4])
         if jurusan in target or "Semua Jurusan" in target:
             filtered.append(row)
-    
     return filtered
 
 def get_all_tasks_by_lecturer(mata_kuliah):
@@ -329,10 +355,8 @@ def update_task(task_id, title=None, description=None, target_jurusan=None, dead
     """Admin function to update task"""
     conn = get_connection()
     c = conn.cursor()
-    
     updates = []
     params = []
-    
     if title:
         updates.append("title=?")
         params.append(title)
@@ -345,13 +369,11 @@ def update_task(task_id, title=None, description=None, target_jurusan=None, dead
     if deadline is not None:
         updates.append("deadline=?")
         params.append(deadline)
-    
     if updates:
         params.append(task_id)
         query = f"UPDATE tasks SET {', '.join(updates)} WHERE id=?"
         c.execute(query, params)
         conn.commit()
-    
     conn.close()
 
 def delete_task(task_id):
@@ -368,16 +390,13 @@ def get_or_create_answer(user_id, username, task_id):
     """Get existing draft or create new one"""
     conn = get_connection()
     c = conn.cursor()
-    
     # Check if answer exists
     c.execute("""
         SELECT id, answer, status, submitted_at, finalized_at 
         FROM answers 
         WHERE user_id=? AND task_id=?
     """, (user_id, task_id))
-    
     row = c.fetchone()
-    
     if row:
         conn.close()
         return row
@@ -473,7 +492,6 @@ def get_all_answers():
 def login_page():
     st.title("🔐 Login E-Learning")
     st.write("Masuk dengan akun Anda")
-
     col1, col2 = st.columns([2, 1])
     with col1:
         username = st.text_input("Username", key="login_username")
@@ -491,14 +509,11 @@ def login_page():
                 st.error("Username atau password salah")
 
 def dashboard_page(user):
-    """Dashboard with user info"""
+    """Dashboard with user info and feedback section"""
     st.header("🏠 Dashboard")
-    
     role = user[3]
     nickname = user[4] or user[1]
-    
     st.write(f"Selamat datang, **{nickname}**!")
-    
     if role == "admin":
         st.info("🔧 Anda adalah Admin. Gunakan menu di sidebar untuk mengelola sistem.")
     elif role == "lecturer":
@@ -508,14 +523,27 @@ def dashboard_page(user):
         jurusan = user[5]
         st.info(f"🎓 Anda adalah Mahasiswa jurusan: **{jurusan}**")
     
+    # ====== TAMBAHAN: Section Feedback ======
+    st.markdown("---")
+    st.subheader("📣 Kirim Feedback ke Admin")
+    with st.form("feedback_form"):
+        feedback_msg = st.text_area("Pesan feedback Anda (saran, masalah, dll)", height=100, 
+                                   placeholder="Contoh: Saya kesulitan mengakses materi untuk mata kuliah Ekonomi...")
+        if st.form_submit_button("📤 Kirim Feedback"):
+            if not feedback_msg.strip():
+                st.error("Pesan feedback tidak boleh kosong")
+            else:
+                add_feedback(user[0], user[1], user[3], feedback_msg.strip())
+                st.success("✅ Feedback berhasil dikirim! Admin akan meninjau pesan Anda segera.")
+                st.rerun()
+    # ====== AKHIR TAMBAHAN ======
+    
     st.markdown("---")
     st.subheader("🔑 Ganti Password")
-    
     with st.form("change_password_form"):
         current_pass = st.text_input("Password Lama", type="password")
         new_pass = st.text_input("Password Baru", type="password")
         confirm_pass = st.text_input("Konfirmasi Password Baru", type="password")
-        
         if st.form_submit_button("💾 Ubah Password"):
             if not current_pass or not new_pass or not confirm_pass:
                 st.error("Semua field harus diisi")
@@ -535,23 +563,18 @@ def dashboard_page(user):
 def manage_users_admin_page():
     """Admin page to manage all users"""
     st.header("👥 Manajemen User (Admin)")
-    
     # List all users
     st.subheader("📋 Daftar User")
     users = list_users()
-    
     if users:
         for u in users:
             user_id, username, role, nickname, jurusan, mata_kuliah = u
-            
             with st.expander(f"👤 {nickname or username} ({role})", expanded=False):
                 with st.form(f"edit_user_{user_id}"):
                     col1, col2 = st.columns(2)
-                    
                     with col1:
                         new_username = st.text_input("Username", value=username, key=f"un_{user_id}")
                         new_nickname = st.text_input("Nickname", value=nickname or "", key=f"nn_{user_id}")
-                    
                     with col2:
                         if role == "student":
                             new_jurusan = st.text_input("Jurusan", value=jurusan or "", key=f"jr_{user_id}")
@@ -561,7 +584,6 @@ def manage_users_admin_page():
                             st.write("")
                         else:
                             st.write("Admin tidak perlu info tambahan")
-                    
                     if st.form_submit_button("💾 Update User"):
                         if role == "student":
                             update_user_info(user_id, new_username, new_nickname, new_jurusan, None)
@@ -569,24 +591,18 @@ def manage_users_admin_page():
                             update_user_info(user_id, new_username, new_nickname, None, new_mata_kuliah)
                         else:
                             update_user_info(user_id, new_username, new_nickname, None, None)
-                        
                         st.success(f"✅ User {new_username} berhasil diupdate")
                         st.rerun()
-    
     st.markdown("---")
     st.subheader("➕ Tambah User Baru")
-    
     with st.form("add_user_form"):
         col1, col2, col3 = st.columns(3)
-        
         with col1:
             new_username = st.text_input("Username")
             new_password = st.text_input("Password", type="password")
-        
         with col2:
             new_role = st.selectbox("Role", ["student", "lecturer", "admin"])
             new_nickname = st.text_input("Nickname")
-        
         with col3:
             if new_role == "student":
                 new_jurusan = st.text_input("Jurusan")
@@ -597,7 +613,6 @@ def manage_users_admin_page():
             else:
                 new_jurusan = ""
                 new_mata_kuliah = ""
-        
         if st.form_submit_button("✅ Buat User"):
             if not new_username or not new_password:
                 st.error("Username dan password wajib diisi")
@@ -614,7 +629,6 @@ def manage_users_admin_page():
 def manage_tasks_admin_page():
     """Admin page to manage all tasks, grouped by mata kuliah"""
     st.header("📝 Manajemen Tugas (Admin)")
-    
     # Get all tasks
     all_tasks = get_all_tasks()
     if not all_tasks:
@@ -714,19 +728,15 @@ def manage_tasks_admin_page():
 def manage_materials_admin_page():
     """Admin page to manage all materials"""
     st.header("📚 Manajemen Materi (Admin)")
-    
     materials = get_all_materials()
-    
     if materials:
         for m in materials:
             mid, title, link, mata_kuliah, target_jurusan, created_by, created_at = m
             target_list = json.loads(target_jurusan)
-            
             with st.expander(f"📖 {title} ({mata_kuliah})", expanded=False):
                 st.write(f"**Link:** {link}")
                 st.write(f"**Dibuat oleh:** {created_by}")
                 st.write(f"**Target Jurusan:** {', '.join(target_list)}")
-                
                 col1, col2 = st.columns([3, 1])
                 with col2:
                     if st.button("🗑️ Hapus", key=f"del_mat_{mid}"):
@@ -739,7 +749,6 @@ def manage_materials_admin_page():
 def view_all_answers_admin_page():
     """Admin view all answers"""
     st.header("📊 Semua Jawaban (Admin)")
-    
     rows = get_all_answers()
     if rows:
         df = pd.DataFrame(rows, columns=[
@@ -751,12 +760,57 @@ def view_all_answers_admin_page():
     else:
         st.info("Belum ada jawaban")
 
+# ========== ADMIN FEEDBACK PAGE ==========
+def view_feedback_admin_page():
+    """Admin page to view all feedback from users"""
+    st.header("📣 Feedback dari Users")
+    
+    # Filter options
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.write("Daftar semua feedback yang dikirim oleh users")
+    
+    feedbacks = get_all_feedback()
+    if feedbacks:
+        # Stats
+        total_feedback = len(feedbacks)
+        student_feedback = len([f for f in feedbacks if f[3] == "student"])
+        lecturer_feedback = len([f for f in feedbacks if f[3] == "lecturer"])
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Feedback", total_feedback)
+        with col2:
+            st.metric("Dari Mahasiswa", student_feedback)
+        with col3:
+            st.metric("Dari Dosen", lecturer_feedback)
+        
+        st.markdown("---")
+        
+        # Display feedback
+        for fb in feedbacks:
+            fb_id, user_id, username, role, message, created_at = fb
+            created_date = created_at.split("T")[0] if created_at else ""
+            
+            with st.expander(f"👤 **{username}** ({role}) - 📅 {created_date}", expanded=False):
+                st.markdown(f"**Pesan:**\n{message}")
+                
+                # Add response button (could be expanded to actual response feature)
+                if st.button("✅ Tandai sebagai Ditangani", key=f"handled_{fb_id}"):
+                    # In a real system, you might add a "handled" status or delete the feedback
+                    # For now, we'll just show a success message
+                    st.success(f"Feedback dari {username} telah ditangani")
+                    # You could implement deletion here if desired
+    else:
+        st.info("Belum ada feedback dari users")
+        st.image("https://static.vecteezy.com/system/resources/previews/004/180/790/non_2x/illustration-of-people-giving-feedback-flat-design-style-vector.jpg", 
+                width=300, caption="Belum ada feedback")
+
 # ========== LECTURER PAGES ==========
 def materials_page_lecturer(user):
     """Lecturer page to manage materials"""
     mata_kuliah = user[6]
     st.header(f"📚 Materi Tambahan - {mata_kuliah}")
-    
     # Add new material (tidak berubah)
     with st.expander("➕ Tambah Materi Baru", expanded=False):
         with st.form("material_form"):
@@ -776,7 +830,6 @@ def materials_page_lecturer(user):
                     add_material(title, link, mata_kuliah, target_jurusan, user[4] or user[1])
                     st.success(f"✅ Materi '{title}' berhasil ditambahkan")
                     st.rerun()
-    
     # List materials dengan index lokal per mata kuliah
     st.markdown("---")
     st.subheader("📖 Daftar Materi Saya")
@@ -805,7 +858,6 @@ def manage_tasks_lecturer_page(user):
     """Lecturer page to manage tasks"""
     mata_kuliah = user[6]
     st.header(f"📝 Manajemen Tugas - {mata_kuliah}")
-    
     # Add new task (tidak berubah)
     with st.expander("➕ Tambah Soal Baru", expanded=False):
         with st.form("task_form"):
@@ -827,7 +879,6 @@ def manage_tasks_lecturer_page(user):
                     add_task(title, desc, mata_kuliah, target_jurusan, user[4] or user[1], deadline_str)
                     st.success(f"✅ Soal '{title}' berhasil disimpan")
                     st.rerun()
-    
     # List tasks dengan format yang dimodifikasi
     st.markdown("---")
     st.subheader("📚 Daftar Soal Saya")
@@ -869,34 +920,25 @@ def manage_tasks_lecturer_page(user):
 def grade_answers_lecturer_page(user):
     """Lecturer page to grade answers"""
     mata_kuliah = user[6]
-    
     st.header(f"✏️ Penilaian Jawaban - {mata_kuliah}")
-    
     tasks = get_all_tasks_by_lecturer(mata_kuliah)
-    
     if not tasks:
         st.info("Belum ada tugas")
         return
-    
     for t in tasks:
         tid, title = t[0], t[1]
-        
         with st.expander(f"📝 {title} (ID: {tid})", expanded=False):
             answers = get_answers_for_task(tid)
-            
             if not answers:
                 st.info("Belum ada jawaban yang disubmit")
                 continue
-            
             for ans in answers:
                 ans_id, _, _, username, answer_text, score, feedback, status, submitted_at, finalized_at = ans
-                
                 st.markdown(f"**Siswa:** {username} | **Status:** {status}")
                 st.write(f"**Submitted:** {submitted_at}")
                 if finalized_at:
                     st.write(f"**Finalized:** {finalized_at}")
                 st.write(f"**Jawaban:** {answer_text}")
-                
                 with st.form(f"grade_{ans_id}"):
                     col1, col2 = st.columns([1, 2])
                     with col1:
@@ -913,12 +955,10 @@ def grade_answers_lecturer_page(user):
                             value=feedback if feedback else "",
                             key=f"fb_{ans_id}"
                         )
-                    
                     if st.form_submit_button("💾 Simpan Nilai"):
                         update_answer_score(ans_id, new_score, fb)
                         st.success("✅ Nilai tersimpan")
                         st.rerun()
-                
                 st.markdown("---")
 
 # ========== STUDENT PAGES ==========
@@ -926,13 +966,10 @@ def get_available_mata_kuliah_for_student(jurusan):
     """Get list of mata kuliah that have tasks/materials for this jurusan"""
     conn = get_connection()
     c = conn.cursor()
-    
     # Get from BOTH tasks AND materials
     c.execute("SELECT DISTINCT mata_kuliah FROM tasks UNION SELECT DISTINCT mata_kuliah FROM materials")
     all_mk = [row[0] for row in c.fetchall()]
-    
     conn.close()
-    
     # Filter by jurusan
     available_mk = []
     for mk in all_mk:
@@ -941,35 +978,25 @@ def get_available_mata_kuliah_for_student(jurusan):
         materials = get_materials_by_mata_kuliah_jurusan(mk, jurusan)
         if tasks or materials:  # ✅ Cek keduanya
             available_mk.append(mk)
-    
     return available_mk
 
 def materials_page_student(user):
     """Student page to view materials"""
     jurusan = user[5]
-    
     st.header("📚 Materi Tambahan")
-    
     available_mk = get_available_mata_kuliah_for_student(jurusan)
-    
     if not available_mk:
         st.info("Belum ada materi tersedia untuk jurusan Anda")
         return
-    
     selected_mk = st.selectbox("Pilih Mata Kuliah", available_mk)
-    
     st.markdown("---")
-    
     materials = get_materials_by_mata_kuliah_jurusan(selected_mk, jurusan)
-    
     if materials:
         for mat in materials:
             mat_id, title, link, _, target_jurusan, created_by, created_at = mat
-            
             with st.expander(f"📌 {title}", expanded=False):
                 st.write(f"**Link:** [{link}]({link})")
                 st.caption(f"Dibuat oleh: {created_by}")
-                
                 # Auto-embed YouTube videos
                 if "youtube.com" in link or "youtu.be" in link:
                     st.video(link)
@@ -981,62 +1008,46 @@ def materials_page_student(user):
 def student_tasks_page(user):
     """Student page to view and submit tasks"""
     jurusan = user[5]
-    
     st.header("📚 Tugas Saya")
-    
     available_mk = get_available_mata_kuliah_for_student(jurusan)
-    
     if not available_mk:
         st.info("Belum ada tugas tersedia untuk jurusan Anda")
         return
-    
     selected_mk = st.selectbox("Pilih Mata Kuliah", available_mk)
-    
     st.markdown("---")
-    
     tasks = get_tasks_by_mata_kuliah_jurusan(selected_mk, jurusan)
-    
     if not tasks:
         st.info("Belum ada tugas untuk mata kuliah ini")
         return
-    
     for t in tasks:
         tid, title, desc, _, target_jurusan, created_by, created_at, deadline = t
-        
         with st.expander(f"📝 {title}", expanded=False):
             st.markdown(f"**Deskripsi:** {desc}")
             if deadline:
                 st.write(f"⏰ **Deadline:** {deadline}")
             st.caption(f"Dibuat oleh: {created_by}")
-            
             st.markdown("---")
-            
             # Get or create answer
             answer_data = get_or_create_answer(user[0], user[1], tid)
             answer_id, answer_text, status, submitted_at, finalized_at = answer_data
-            
             if status == "submitted":
                 st.success("✅ Tugas ini sudah diselesaikan")
                 st.info(f"**Jawaban Anda:** {answer_text}")
                 st.caption(f"Difinalisasi pada: {finalized_at}")
-                
                 # Show score if graded
                 conn = get_connection()
                 c = conn.cursor()
                 c.execute("SELECT score, feedback FROM answers WHERE id=?", (answer_id,))
                 r = c.fetchone()
                 conn.close()
-                
                 if r and r[0] is not None:
                     st.metric("Score", f"{r[0]}/100")
                     if r[1]:
                         st.write(f"**Feedback:** {r[1]}")
                 else:
                     st.info("Menunggu penilaian dari dosen")
-            
             else:  # draft
                 st.info("📝 Status: Draft (belum diselesaikan)")
-                
                 with st.form(f"task_{tid}"):
                     user_answer = st.text_area(
                         "Jawaban Anda", 
@@ -1044,9 +1055,7 @@ def student_tasks_page(user):
                         key=f"input_{tid}",
                         height=150
                     )
-                    
                     col1, col2 = st.columns(2)
-                    
                     with col1:
                         if st.form_submit_button("💾 Simpan Draft"):
                             if not user_answer.strip():
@@ -1055,7 +1064,6 @@ def student_tasks_page(user):
                                 save_answer_draft(answer_id, user_answer)
                                 st.success("✅ Draft tersimpan. Anda masih bisa mengubahnya.")
                                 st.rerun()
-                    
                     with col2:
                         if st.form_submit_button("✔️ Selesai & Submit", type="primary"):
                             if not user_answer.strip():
@@ -1069,32 +1077,22 @@ def student_tasks_page(user):
 def student_results_page(user):
     """Student page to view results"""
     jurusan = user[5]
-    
     st.header("📊 Hasil & Nilai Saya")
-    
     available_mk = get_available_mata_kuliah_for_student(jurusan)
-    
     if not available_mk:
         st.info("Belum ada hasil tersedia")
         return
-    
     selected_mk = st.selectbox("Pilih Mata Kuliah", available_mk)
-    
     st.markdown("---")
-    
     my_answers = get_answers_for_user_by_mata_kuliah(user[0], selected_mk)
-    
     if my_answers:
         for ans in my_answers:
             ans_id, task_title, answer, score, feedback, status, submitted_at, finalized_at = ans
-            
             with st.expander(f"📝 {task_title}", expanded=False):
                 st.write(f"**Status:** {status}")
                 st.write(f"**Jawaban:** {answer}")
-                
                 if status == "submitted":
                     st.caption(f"Submitted: {finalized_at}")
-                    
                     if score is not None:
                         st.metric("Score", f"{score}/100")
                         if feedback:
@@ -1109,39 +1107,37 @@ def student_results_page(user):
 # ========== MAIN APP ==========
 def main():
     st.set_page_config(page_title="E-Learning System", page_icon="🎓", layout="wide")
-    
     create_db()
-
+    create_feedback_db()  # Create feedback database
+    
     # Ensure default admin exists
     if not user_exists("admin"):
         add_user("admin", "admin123", "admin", "Admin", "", "")
-
+    
     # Session init
     if "user" not in st.session_state:
         st.session_state["user"] = None
-
+    
     # Login check
     if st.session_state["user"] is None:
         login_page()
         return
-
+    
     # User logged in
     user = st.session_state["user"]
     role = user[3]
     nickname = user[4] or user[1]
-
+    
     # Sidebar
     st.sidebar.title("🎓 E-Learning")
     st.sidebar.write(f"👤 **{nickname}**")
     st.sidebar.caption(f"Role: {role}")
-    
     if role == "student":
         st.sidebar.caption(f"Jurusan: {user[5]}")
     elif role == "lecturer":
         st.sidebar.caption(f"Mata Kuliah: {user[6]}")
-    
     st.sidebar.markdown("---")
-
+    
     # Menu based on role
     if role == "admin":
         menu = st.sidebar.radio("🧭 Navigasi", [
@@ -1149,7 +1145,8 @@ def main():
             "👥 Manajemen User",
             "📚 Manajemen Materi",
             "📝 Manajemen Tugas",
-            "📊 Semua Jawaban"
+            "📊 Semua Jawaban",
+            "📣 Feedback Users"  # Menu baru untuk feedback
         ])
     elif role == "lecturer":
         menu = st.sidebar.radio("🧭 Navigasi", [
@@ -1165,27 +1162,24 @@ def main():
             "📚 Tugas Saya",
             "📊 Hasil & Nilai"
         ])
-
+    
     if st.sidebar.button("🚪 Logout"):
         st.session_state.clear()
         st.rerun()
-
+    
     # ROUTING
     if menu == "Dashboard":
         dashboard_page(user)
-    
     elif menu == "👥 Manajemen User":
         if role == "admin":
             manage_users_admin_page()
         else:
             st.error("🚫 Hanya admin yang dapat mengakses halaman ini")
-    
     elif menu == "📚 Manajemen Materi":
         if role == "admin":
             manage_materials_admin_page()
         else:
             st.error("🚫 Hanya admin yang dapat mengakses halaman ini")
-    
     elif menu == "📝 Manajemen Tugas":
         if role == "admin":
             manage_tasks_admin_page()
@@ -1193,30 +1187,30 @@ def main():
             manage_tasks_lecturer_page(user)
         else:
             st.error("🚫 Hanya admin/lecturer yang dapat mengakses halaman ini")
-    
     elif menu == "✏️ Penilaian Jawaban":
         if role == "lecturer":
             grade_answers_lecturer_page(user)
         else:
             st.error("🚫 Hanya lecturer yang dapat mengakses halaman ini")
-    
     elif menu == "📊 Semua Jawaban":
         if role == "admin":
             view_all_answers_admin_page()
         else:
             st.error("🚫 Hanya admin yang dapat mengakses halaman ini")
-    
     elif menu == "📚 Materi Tambahan":
         if role == "student":
             materials_page_student(user)
         elif role == "lecturer":
             materials_page_lecturer(user)
-    
-    elif menu == "📚 Tugas Saya":
+    elif menu == "📚 Tugas Saya":   
         student_tasks_page(user)
-    
     elif menu == "📊 Hasil & Nilai":
         student_results_page(user)
+    elif menu == "📣 Feedback Users":
+        if role == "admin":
+            view_feedback_admin_page()
+        else:
+            st.error("🚫 Hanya admin yang dapat mengakses halaman ini")
 
 if __name__ == "__main__":
     main()
