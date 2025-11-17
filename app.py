@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 from datetime import datetime
 import pandas as pd
+import json
 
 # DATABASE HELPERS
 DB_PATH = "database.db"
@@ -12,28 +13,35 @@ def get_connection():
 def create_db():
     conn = get_connection()
     c = conn.cursor()
-    # USERS
+    
+    # USERS - Enhanced dengan nickname, jurusan, mata_kuliah
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE,
             password TEXT,
-            role TEXT
+            role TEXT,
+            nickname TEXT,
+            jurusan TEXT,
+            mata_kuliah TEXT
         )
     """)
-    # TASKS
+    
+    # TASKS - Enhanced dengan target_jurusan (JSON array)
     c.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT,
             description TEXT,
-            correct_answer TEXT,
+            mata_kuliah TEXT,
+            target_jurusan TEXT,
             created_by TEXT,
             created_at TEXT,
             deadline TEXT
         )
     """)
-    # ANSWERS
+    
+    # ANSWERS - Enhanced dengan status (draft/submitted)
     c.execute("""
         CREATE TABLE IF NOT EXISTS answers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,38 +51,43 @@ def create_db():
             answer TEXT,
             score INTEGER,
             feedback TEXT,
+            status TEXT DEFAULT 'draft',
             submitted_at TEXT,
+            finalized_at TEXT,
             FOREIGN KEY(task_id) REFERENCES tasks(id),
             FOREIGN KEY(user_id) REFERENCES users(id)
         )
     """)
-    # MATERIALS (NEW)
+    
+    # MATERIALS - Enhanced dengan mata_kuliah dan target_jurusan
     c.execute("""
         CREATE TABLE IF NOT EXISTS materials (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT,
             link TEXT,
+            mata_kuliah TEXT,
+            target_jurusan TEXT,
             created_by TEXT,
             created_at TEXT
         )
     """)
+    
     conn.commit()
     conn.close()
 
-# USER / AUTH FUNCTIONS
-def add_user(username, password, role="student"):
+# ========== USER FUNCTIONS ==========
+def add_user(username, password, role="student", nickname="", jurusan="", mata_kuliah=""):
     try:
         conn = get_connection()
         c = conn.cursor()
-        c.execute("INSERT INTO users(username, password, role) VALUES (?, ?, ?)",
-                  (username, password, role))
+        c.execute("""
+            INSERT INTO users(username, password, role, nickname, jurusan, mata_kuliah) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (username, password, role, nickname, jurusan, mata_kuliah))
         conn.commit()
         conn.close()
         return True
     except sqlite3.IntegrityError:
-        return False
-    except Exception as e:
-        print("add_user error:", e)
         return False
 
 def user_exists(username):
@@ -88,7 +101,10 @@ def user_exists(username):
 def get_user_by_credentials(username, password):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, username, password, role FROM users WHERE username=? AND password=?", (username, password))
+    c.execute("""
+        SELECT id, username, password, role, nickname, jurusan, mata_kuliah 
+        FROM users WHERE username=? AND password=?
+    """, (username, password))
     row = c.fetchone()
     conn.close()
     return row
@@ -100,29 +116,107 @@ def update_user_password(user_id, new_password):
     conn.commit()
     conn.close()
 
+def update_user_info(user_id, username=None, nickname=None, jurusan=None, mata_kuliah=None):
+    """Admin function to update user info"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    updates = []
+    params = []
+    
+    if username:
+        updates.append("username=?")
+        params.append(username)
+    if nickname is not None:
+        updates.append("nickname=?")
+        params.append(nickname)
+    if jurusan is not None:
+        updates.append("jurusan=?")
+        params.append(jurusan)
+    if mata_kuliah is not None:
+        updates.append("mata_kuliah=?")
+        params.append(mata_kuliah)
+    
+    if updates:
+        params.append(user_id)
+        query = f"UPDATE users SET {', '.join(updates)} WHERE id=?"
+        c.execute(query, params)
+        conn.commit()
+    
+    conn.close()
+
 def list_users():
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, username, role FROM users ORDER BY id")
+    c.execute("SELECT id, username, role, nickname, jurusan, mata_kuliah FROM users ORDER BY id")
     rows = c.fetchall()
     conn.close()
     return rows
 
-# MATERIALS FUNCTIONS (NEW)
-def add_material(title, link, created_by):
+def get_user_by_id(user_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, username, role, nickname, jurusan, mata_kuliah FROM users WHERE id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+# ========== MATERIALS FUNCTIONS ==========
+def add_material(title, link, mata_kuliah, target_jurusan, created_by):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO materials(title, link, created_by, created_at)
-        VALUES (?, ?, ?, ?)
-    """, (title, link, created_by, datetime.now().isoformat()))
+        INSERT INTO materials(title, link, mata_kuliah, target_jurusan, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (title, link, mata_kuliah, json.dumps(target_jurusan), created_by, datetime.now().isoformat()))
     conn.commit()
     conn.close()
 
-def get_all_materials():
+def get_materials_by_mata_kuliah_jurusan(mata_kuliah, jurusan):
+    """Get materials filtered by mata kuliah and jurusan"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, title, link, created_by, created_at FROM materials ORDER BY id DESC")
+    c.execute("""
+        SELECT id, title, link, mata_kuliah, target_jurusan, created_by, created_at 
+        FROM materials 
+        WHERE mata_kuliah=?
+        ORDER BY id DESC
+    """, (mata_kuliah,))
+    rows = c.fetchall()
+    conn.close()
+    
+    # Filter by jurusan
+    filtered = []
+    for row in rows:
+        target = json.loads(row[4])
+        if jurusan in target or "Semua Jurusan" in target:
+            filtered.append(row)
+    
+    return filtered
+
+def get_all_materials_by_lecturer(mata_kuliah):
+    """Get all materials created by lecturer for their mata kuliah"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, title, link, mata_kuliah, target_jurusan, created_by, created_at 
+        FROM materials 
+        WHERE mata_kuliah=?
+        ORDER BY id DESC
+    """, (mata_kuliah,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_materials():
+    """Admin: get all materials"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, title, link, mata_kuliah, target_jurusan, created_by, created_at 
+        FROM materials 
+        ORDER BY id DESC
+    """)
     rows = c.fetchall()
     conn.close()
     return rows
@@ -134,21 +228,88 @@ def delete_material(material_id):
     conn.commit()
     conn.close()
 
-# TASKS & ANSWERS FUNCTIONS
-def add_task(title, description, correct_answer, created_by, deadline=None):
+def update_material(material_id, title=None, link=None, target_jurusan=None):
+    """Admin function to update material"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    updates = []
+    params = []
+    
+    if title:
+        updates.append("title=?")
+        params.append(title)
+    if link:
+        updates.append("link=?")
+        params.append(link)
+    if target_jurusan:
+        updates.append("target_jurusan=?")
+        params.append(json.dumps(target_jurusan))
+    
+    if updates:
+        params.append(material_id)
+        query = f"UPDATE materials SET {', '.join(updates)} WHERE id=?"
+        c.execute(query, params)
+        conn.commit()
+    
+    conn.close()
+
+# ========== TASKS FUNCTIONS ==========
+def add_task(title, description, mata_kuliah, target_jurusan, created_by, deadline=None):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO tasks(title, description, correct_answer, created_by, created_at, deadline)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (title, description, correct_answer, created_by, datetime.now().isoformat(), deadline))
+        INSERT INTO tasks(title, description, mata_kuliah, target_jurusan, created_by, created_at, deadline)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (title, description, mata_kuliah, json.dumps(target_jurusan), created_by, datetime.now().isoformat(), deadline))
     conn.commit()
     conn.close()
 
-def get_all_tasks():
+def get_tasks_by_mata_kuliah_jurusan(mata_kuliah, jurusan):
+    """Get tasks filtered by mata kuliah and jurusan"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, title, description, correct_answer, created_by, created_at, deadline FROM tasks ORDER BY id")
+    c.execute("""
+        SELECT id, title, description, mata_kuliah, target_jurusan, created_by, created_at, deadline 
+        FROM tasks 
+        WHERE mata_kuliah=?
+        ORDER BY id
+    """, (mata_kuliah,))
+    rows = c.fetchall()
+    conn.close()
+    
+    # Filter by jurusan
+    filtered = []
+    for row in rows:
+        target = json.loads(row[4])
+        if jurusan in target or "Semua Jurusan" in target:
+            filtered.append(row)
+    
+    return filtered
+
+def get_all_tasks_by_lecturer(mata_kuliah):
+    """Get all tasks created by lecturer for their mata kuliah"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, title, description, mata_kuliah, target_jurusan, created_by, created_at, deadline 
+        FROM tasks 
+        WHERE mata_kuliah=?
+        ORDER BY id
+    """, (mata_kuliah,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_tasks():
+    """Admin: get all tasks"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, title, description, mata_kuliah, target_jurusan, created_by, created_at, deadline 
+        FROM tasks 
+        ORDER BY id
+    """)
     rows = c.fetchall()
     conn.close()
     return rows
@@ -156,47 +317,131 @@ def get_all_tasks():
 def get_task(task_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, title, description, correct_answer, created_by, created_at, deadline FROM tasks WHERE id=?", (task_id,))
+    c.execute("""
+        SELECT id, title, description, mata_kuliah, target_jurusan, created_by, created_at, deadline 
+        FROM tasks WHERE id=?
+    """, (task_id,))
     row = c.fetchone()
     conn.close()
     return row
 
-def user_answer_exists(user_id, task_id):
+def update_task(task_id, title=None, description=None, target_jurusan=None, deadline=None):
+    """Admin function to update task"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id FROM answers WHERE user_id=? AND task_id=?", (user_id, task_id))
-    row = c.fetchone()
+    
+    updates = []
+    params = []
+    
+    if title:
+        updates.append("title=?")
+        params.append(title)
+    if description:
+        updates.append("description=?")
+        params.append(description)
+    if target_jurusan:
+        updates.append("target_jurusan=?")
+        params.append(json.dumps(target_jurusan))
+    if deadline is not None:
+        updates.append("deadline=?")
+        params.append(deadline)
+    
+    if updates:
+        params.append(task_id)
+        query = f"UPDATE tasks SET {', '.join(updates)} WHERE id=?"
+        c.execute(query, params)
+        conn.commit()
+    
     conn.close()
-    return row is not None
 
-def submit_answer(user_id, username, task_id, answer_text, score=None):
+def delete_task(task_id):
+    """Admin function to delete task"""
     conn = get_connection()
     c = conn.cursor()
-    submitted_at = datetime.now().isoformat()
+    c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+    c.execute("DELETE FROM answers WHERE task_id=?", (task_id,))
+    conn.commit()
+    conn.close()
+
+# ========== ANSWERS FUNCTIONS ==========
+def get_or_create_answer(user_id, username, task_id):
+    """Get existing draft or create new one"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # Check if answer exists
     c.execute("""
-        INSERT INTO answers(task_id, user_id, username, answer, score, submitted_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (task_id, user_id, username, answer_text, score, submitted_at))
+        SELECT id, answer, status, submitted_at, finalized_at 
+        FROM answers 
+        WHERE user_id=? AND task_id=?
+    """, (user_id, task_id))
+    
+    row = c.fetchone()
+    
+    if row:
+        conn.close()
+        return row
+    else:
+        # Create new draft
+        c.execute("""
+            INSERT INTO answers(task_id, user_id, username, answer, status, submitted_at)
+            VALUES (?, ?, ?, '', 'draft', ?)
+        """, (task_id, user_id, username, datetime.now().isoformat()))
+        conn.commit()
+        answer_id = c.lastrowid
+        conn.close()
+        return (answer_id, '', 'draft', datetime.now().isoformat(), None)
+
+def save_answer_draft(answer_id, answer_text):
+    """Save answer as draft (can be edited)"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE answers 
+        SET answer=?, submitted_at=? 
+        WHERE id=?
+    """, (answer_text, datetime.now().isoformat(), answer_id))
+    conn.commit()
+    conn.close()
+
+def finalize_answer(answer_id):
+    """Finalize answer (lock from editing)"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE answers 
+        SET status='submitted', finalized_at=? 
+        WHERE id=?
+    """, (datetime.now().isoformat(), answer_id))
     conn.commit()
     conn.close()
 
 def get_answers_for_task(task_id):
+    """Get all submitted answers for a task"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, task_id, user_id, username, answer, score, feedback, submitted_at FROM answers WHERE task_id=? ORDER BY id", (task_id,))
+    c.execute("""
+        SELECT id, task_id, user_id, username, answer, score, feedback, status, submitted_at, finalized_at 
+        FROM answers 
+        WHERE task_id=? AND status='submitted'
+        ORDER BY id
+    """, (task_id,))
     rows = c.fetchall()
     conn.close()
     return rows
 
-def get_answers_for_user(user_id):
+def get_answers_for_user_by_mata_kuliah(user_id, mata_kuliah):
+    """Get user's answers filtered by mata kuliah"""
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        SELECT answers.id, tasks.title, answers.answer, answers.score, answers.feedback, answers.submitted_at
-        FROM answers JOIN tasks ON answers.task_id = tasks.id
-        WHERE answers.user_id=?
+        SELECT answers.id, tasks.title, answers.answer, answers.score, answers.feedback, 
+               answers.status, answers.submitted_at, answers.finalized_at
+        FROM answers 
+        JOIN tasks ON answers.task_id = tasks.id
+        WHERE answers.user_id=? AND tasks.mata_kuliah=?
         ORDER BY answers.id
-    """, (user_id,))
+    """, (user_id, mata_kuliah))
     rows = c.fetchall()
     conn.close()
     return rows
@@ -209,20 +454,22 @@ def update_answer_score(answer_id, score, feedback=None):
     conn.close()
 
 def get_all_answers():
-    """Get all answers with task info for admin view"""
+    """Admin: get all answers"""
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        SELECT answers.id, answers.task_id, tasks.title, answers.username, 
-               answers.answer, answers.score, answers.feedback, answers.submitted_at
-        FROM answers JOIN tasks ON answers.task_id=tasks.id
+        SELECT answers.id, answers.task_id, tasks.title, tasks.mata_kuliah, 
+               answers.username, answers.answer, answers.score, answers.feedback, 
+               answers.status, answers.submitted_at, answers.finalized_at
+        FROM answers 
+        JOIN tasks ON answers.task_id=tasks.id
         ORDER BY answers.id DESC
     """)
     rows = c.fetchall()
     conn.close()
     return rows
 
-# UI: PAGES
+# ========== UI PAGES ==========
 def login_page():
     st.title("🔐 Login E-Learning")
     st.write("Masuk dengan akun Anda")
@@ -238,26 +485,31 @@ def login_page():
             user = get_user_by_credentials(username, password)
             if user:
                 st.session_state["user"] = user
-                st.success(f"Login berhasil sebagai `{user[1]}` (role: {user[3]})")
+                st.success(f"Login berhasil sebagai `{user[4] or user[1]}` (role: {user[3]})")
                 st.rerun()
             else:
                 st.error("Username atau password salah")
 
 def dashboard_page(user):
-    """Dashboard with change password feature"""
+    """Dashboard with user info"""
     st.header("🏠 Dashboard")
-    st.write(f"Selamat datang, **{user[1]}**!")
     
     role = user[3]
+    nickname = user[4] or user[1]
+    
+    st.write(f"Selamat datang, **{nickname}**!")
+    
     if role == "admin":
-        st.info("Anda adalah Admin. Gunakan menu di sidebar untuk mengelola sistem.")
+        st.info("🔧 Anda adalah Admin. Gunakan menu di sidebar untuk mengelola sistem.")
     elif role == "lecturer":
-        st.info("Anda adalah Dosen. Gunakan menu untuk membuat tugas dan menilai jawaban.")
-    else:
-        st.info("Anda adalah Mahasiswa. Lihat tugas dan hasil nilai Anda di menu sidebar.")
+        mata_kuliah = user[6]
+        st.info(f"👨‍🏫 Anda adalah Dosen mata kuliah: **{mata_kuliah}**")
+    else:  # student
+        jurusan = user[5]
+        st.info(f"🎓 Anda adalah Mahasiswa jurusan: **{jurusan}**")
     
     st.markdown("---")
-    st.subheader("🔐 Ganti Password")
+    st.subheader("🔑 Ganti Password")
     
     with st.form("change_password_form"):
         current_pass = st.text_input("Password Lama", type="password")
@@ -279,70 +531,211 @@ def dashboard_page(user):
                 st.session_state.clear()
                 st.rerun()
 
-def manage_users_page():
-    """Admin page untuk manage users"""
-    st.header("👥 Manajemen User")
+# ========== ADMIN PAGES ==========
+def manage_users_admin_page():
+    """Admin page to manage all users"""
+    st.header("👥 Manajemen User (Admin)")
     
+    # List all users
     st.subheader("📋 Daftar User")
     users = list_users()
+    
     if users:
-        df = pd.DataFrame(users, columns=["ID", "Username", "Role"])
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.info("Belum ada user")
-
+        for u in users:
+            user_id, username, role, nickname, jurusan, mata_kuliah = u
+            
+            with st.expander(f"👤 {nickname or username} ({role})", expanded=False):
+                with st.form(f"edit_user_{user_id}"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        new_username = st.text_input("Username", value=username, key=f"un_{user_id}")
+                        new_nickname = st.text_input("Nickname", value=nickname or "", key=f"nn_{user_id}")
+                    
+                    with col2:
+                        if role == "student":
+                            new_jurusan = st.text_input("Jurusan", value=jurusan or "", key=f"jr_{user_id}")
+                            st.write("")
+                        elif role == "lecturer":
+                            new_mata_kuliah = st.text_input("Mata Kuliah", value=mata_kuliah or "", key=f"mk_{user_id}")
+                            st.write("")
+                        else:
+                            st.write("Admin tidak perlu info tambahan")
+                    
+                    if st.form_submit_button("💾 Update User"):
+                        if role == "student":
+                            update_user_info(user_id, new_username, new_nickname, new_jurusan, None)
+                        elif role == "lecturer":
+                            update_user_info(user_id, new_username, new_nickname, None, new_mata_kuliah)
+                        else:
+                            update_user_info(user_id, new_username, new_nickname, None, None)
+                        
+                        st.success(f"✅ User {new_username} berhasil diupdate")
+                        st.rerun()
+    
     st.markdown("---")
     st.subheader("➕ Tambah User Baru")
-    with st.form("register_form"):
-        new_username = st.text_input("Username")
-        new_pass = st.text_input("Password", type="password")
-        new_role = st.selectbox("Role", ["student", "lecturer", "admin"])
-        submitted = st.form_submit_button("Buat User")
+    
+    with st.form("add_user_form"):
+        col1, col2, col3 = st.columns(3)
         
-        if submitted:
-            if not new_username or not new_pass:
-                st.error("Username dan password tidak boleh kosong")
+        with col1:
+            new_username = st.text_input("Username")
+            new_password = st.text_input("Password", type="password")
+        
+        with col2:
+            new_role = st.selectbox("Role", ["student", "lecturer", "admin"])
+            new_nickname = st.text_input("Nickname")
+        
+        with col3:
+            if new_role == "student":
+                new_jurusan = st.text_input("Jurusan")
+                new_mata_kuliah = ""
+            elif new_role == "lecturer":
+                new_mata_kuliah = st.text_input("Mata Kuliah")
+                new_jurusan = ""
+            else:
+                new_jurusan = ""
+                new_mata_kuliah = ""
+        
+        if st.form_submit_button("✅ Buat User"):
+            if not new_username or not new_password:
+                st.error("Username dan password wajib diisi")
             elif user_exists(new_username):
                 st.error("Username sudah ada")
             else:
-                ok = add_user(new_username, new_pass, new_role)
+                ok = add_user(new_username, new_password, new_role, new_nickname, new_jurusan, new_mata_kuliah)
                 if ok:
-                    st.success(f"✅ User '{new_username}' berhasil dibuat dengan role {new_role}")
+                    st.success(f"✅ User '{new_username}' berhasil dibuat")
                     st.rerun()
                 else:
                     st.error("Gagal membuat user")
 
+def manage_tasks_admin_page():
+    """Admin page to manage all tasks"""
+    st.header("📝 Manajemen Tugas (Admin)")
+    
+    tasks = get_all_tasks()
+    
+    if tasks:
+        for t in tasks:
+            tid, title, desc, mata_kuliah, target_jurusan, created_by, created_at, deadline = t
+            target_list = json.loads(target_jurusan)
+            
+            with st.expander(f"📄 Tugas #{tid}: {title} ({mata_kuliah})", expanded=False):
+                st.write(f"**Dibuat oleh:** {created_by}")
+                st.write(f"**Target Jurusan:** {', '.join(target_list)}")
+                
+                with st.form(f"edit_task_{tid}"):
+                    new_title = st.text_input("Judul", value=title)
+                    new_desc = st.text_area("Deskripsi", value=desc)
+                    new_deadline = st.date_input("Deadline", value=None if not deadline else datetime.fromisoformat(deadline).date())
+                    
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        if st.form_submit_button("💾 Update"):
+                            update_task(tid, new_title, new_desc, None, new_deadline.isoformat() if new_deadline else None)
+                            st.success("✅ Tugas berhasil diupdate")
+                            st.rerun()
+                    
+                    with col2:
+                        if st.form_submit_button("🗑️ Hapus", type="secondary"):
+                            delete_task(tid)
+                            st.success("✅ Tugas dihapus")
+                            st.rerun()
+    else:
+        st.info("Belum ada tugas")
+
+def manage_materials_admin_page():
+    """Admin page to manage all materials"""
+    st.header("📚 Manajemen Materi (Admin)")
+    
+    materials = get_all_materials()
+    
+    if materials:
+        for m in materials:
+            mid, title, link, mata_kuliah, target_jurusan, created_by, created_at = m
+            target_list = json.loads(target_jurusan)
+            
+            with st.expander(f"📖 {title} ({mata_kuliah})", expanded=False):
+                st.write(f"**Link:** {link}")
+                st.write(f"**Dibuat oleh:** {created_by}")
+                st.write(f"**Target Jurusan:** {', '.join(target_list)}")
+                
+                col1, col2 = st.columns([3, 1])
+                with col2:
+                    if st.button("🗑️ Hapus", key=f"del_mat_{mid}"):
+                        delete_material(mid)
+                        st.success("✅ Materi dihapus")
+                        st.rerun()
+    else:
+        st.info("Belum ada materi")
+
+def view_all_answers_admin_page():
+    """Admin view all answers"""
+    st.header("📊 Semua Jawaban (Admin)")
+    
+    rows = get_all_answers()
+    if rows:
+        df = pd.DataFrame(rows, columns=[
+            "ID", "Task ID", "Task Title", "Mata Kuliah", 
+            "Username", "Answer", "Score", "Feedback", 
+            "Status", "Submitted", "Finalized"
+        ])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("Belum ada jawaban")
+
+# ========== LECTURER PAGES ==========
 def materials_page_lecturer(user):
     """Lecturer page to manage materials"""
-    st.header("📚 Manajemen Materi Tambahan")
+    mata_kuliah = user[6]
     
+    st.header(f"📚 Materi Tambahan - {mata_kuliah}")
+    
+    # Add new material
     with st.expander("➕ Tambah Materi Baru", expanded=False):
         with st.form("material_form"):
             title = st.text_input("Judul Materi")
             link = st.text_input("Link (YouTube/Google Drive/dll)")
+            
+            # Get available jurusan from lecturer's teaching assignment
+            # For simplicity, let lecturer input jurusan manually
+            jurusan_input = st.text_input("Target Jurusan (pisahkan dengan koma, atau tulis 'Semua Jurusan')")
+            
             submitted = st.form_submit_button("💾 Simpan Materi")
             
             if submitted:
-                if not title or not link:
-                    st.error("Judul dan link tidak boleh kosong")
+                if not title or not link or not jurusan_input:
+                    st.error("Semua field harus diisi")
                 else:
-                    add_material(title, link, user[1])
+                    # Parse jurusan
+                    if jurusan_input.strip().lower() == "semua jurusan":
+                        target_jurusan = ["Semua Jurusan"]
+                    else:
+                        target_jurusan = [j.strip() for j in jurusan_input.split(",")]
+                    
+                    add_material(title, link, mata_kuliah, target_jurusan, user[4] or user[1])
                     st.success(f"✅ Materi '{title}' berhasil ditambahkan")
                     st.rerun()
     
+    # List materials
     st.markdown("---")
-    st.subheader("📖 Daftar Materi Tambahan")
-    materials = get_all_materials()
+    st.subheader("📖 Daftar Materi Saya")
+    materials = get_all_materials_by_lecturer(mata_kuliah)
     
     if materials:
         for mat in materials:
-            mat_id, title, link, created_by, created_at = mat
+            mat_id, title, link, _, target_jurusan, created_by, created_at = mat
+            target_list = json.loads(target_jurusan)
+            
             col1, col2 = st.columns([4, 1])
             
             with col1:
                 st.markdown(f"### 📌 {title}")
                 st.write(f"🔗 Link: [{link}]({link})")
-                st.caption(f"Dibuat oleh: {created_by} pada {created_at}")
+                st.write(f"🎯 Target: {', '.join(target_list)}")
+                st.caption(f"Dibuat pada {created_at}")
             
             with col2:
                 if st.button("🗑️ Hapus", key=f"del_{mat_id}"):
@@ -352,88 +745,88 @@ def materials_page_lecturer(user):
             
             st.markdown("---")
     else:
-        st.info("Belum ada materi tambahan")
+        st.info("Belum ada materi")
 
-def materials_page_student():
-    """Student page to view materials"""
-    st.header("📚 Materi Tambahan")
-    st.write("Berikut adalah materi tambahan yang dapat Anda pelajari:")
+def manage_tasks_lecturer_page(user):
+    """Lecturer page to manage tasks"""
+    mata_kuliah = user[6]
     
-    materials = get_all_materials()
+    st.header(f"📝 Manajemen Tugas - {mata_kuliah}")
     
-    if materials:
-        for mat in materials:
-            mat_id, title, link, created_by, created_at = mat
-            
-            with st.expander(f"📌 {title}", expanded=False):
-                st.write(f"**Link:** [{link}]({link})")
-                st.caption(f"Dibuat oleh: {created_by}")
-                
-                # Auto-embed YouTube videos
-                if "youtube.com" in link or "youtu.be" in link:
-                    st.video(link)
-                else:
-                    st.info("Klik link di atas untuk membuka materi")
-    else:
-        st.info("Belum ada materi tambahan tersedia")
-
-def manage_tasks_page(user):
-    """Page untuk lecturer/admin manage tasks"""
-    st.header("📝 Manajemen Tugas")
-    
+    # Add new task
     with st.expander("➕ Tambah Soal Baru", expanded=False):
         with st.form("task_form"):
             title = st.text_input("Judul Soal")
             desc = st.text_area("Deskripsi / Soal")
-            correct = st.text_input("Jawaban Benar (untuk auto-scoring, opsional)")
             deadline = st.date_input("Deadline (opsional)", value=None)
+            
+            jurusan_input = st.text_input("Target Jurusan (pisahkan dengan koma, atau tulis 'Semua Jurusan')")
+            
             submitted = st.form_submit_button("💾 Simpan Soal")
             
             if submitted:
-                if not title or not desc:
-                    st.error("Judul dan deskripsi tidak boleh kosong")
+                if not title or not desc or not jurusan_input:
+                    st.error("Judul, deskripsi, dan target jurusan harus diisi")
                 else:
+                    # Parse jurusan
+                    if jurusan_input.strip().lower() == "semua jurusan":
+                        target_jurusan = ["Semua Jurusan"]
+                    else:
+                        target_jurusan = [j.strip() for j in jurusan_input.split(",")]
+                    
                     deadline_str = deadline.isoformat() if deadline else None
-                    add_task(title, desc, correct, user[1], deadline_str)
+                    add_task(title, desc, mata_kuliah, target_jurusan, user[4] or user[1], deadline_str)
                     st.success(f"✅ Soal '{title}' berhasil disimpan")
                     st.rerun()
-
+    
+    # List tasks
     st.markdown("---")
-    st.subheader("📚 Daftar Semua Soal")
-    tasks = get_all_tasks()
+    st.subheader("📚 Daftar Soal Saya")
+    tasks = get_all_tasks_by_lecturer(mata_kuliah)
+    
     if tasks:
         for t in tasks:
-            tid, title, desc, correct, created_by, created_at, deadline = t
+            tid, title, desc, _, target_jurusan, created_by, created_at, deadline = t
+            target_list = json.loads(target_jurusan)
+            
             with st.expander(f"📄 Soal {tid}: {title}", expanded=False):
                 st.write(f"**Deskripsi:** {desc}")
-                st.write(f"**Dibuat oleh:** {created_by} pada {created_at}")
+                st.write(f"**Target Jurusan:** {', '.join(target_list)}")
                 if deadline:
                     st.write(f"**Deadline:** {deadline}")
-                if correct:
-                    st.write(f"**Jawaban Benar:** {correct}")
+                st.caption(f"Dibuat pada {created_at}")
     else:
         st.info("Belum ada soal")
 
-def grade_answers_page(user):
-    """Page untuk lecturer grade jawaban"""
-    st.header("✍️ Penilaian Jawaban")
+def grade_answers_lecturer_page(user):
+    """Lecturer page to grade answers"""
+    mata_kuliah = user[6]
     
-    tasks = get_all_tasks()
+    st.header(f"✏️ Penilaian Jawaban - {mata_kuliah}")
+    
+    tasks = get_all_tasks_by_lecturer(mata_kuliah)
+    
     if not tasks:
         st.info("Belum ada tugas")
         return
     
     for t in tasks:
         tid, title = t[0], t[1]
+        
         with st.expander(f"📝 {title} (ID: {tid})", expanded=False):
             answers = get_answers_for_task(tid)
+            
             if not answers:
-                st.info("Belum ada jawaban untuk soal ini")
+                st.info("Belum ada jawaban yang disubmit")
                 continue
             
             for ans in answers:
-                ans_id, _, _, username, answer_text, score, feedback, submitted_at = ans
-                st.markdown(f"**Siswa:** {username} | **Submitted:** {submitted_at}")
+                ans_id, _, _, username, answer_text, score, feedback, status, submitted_at, finalized_at = ans
+                
+                st.markdown(f"**Siswa:** {username} | **Status:** {status}")
+                st.write(f"**Submitted:** {submitted_at}")
+                if finalized_at:
+                    st.write(f"**Finalized:** {finalized_at}")
                 st.write(f"**Jawaban:** {answer_text}")
                 
                 with st.form(f"grade_{ans_id}"):
@@ -460,39 +853,87 @@ def grade_answers_page(user):
                 
                 st.markdown("---")
 
-def view_all_answers_page():
-    """Admin view all answers"""
-    st.header("📊 Semua Jawaban (Admin)")
+# ========== STUDENT PAGES ==========
+def get_available_mata_kuliah_for_student(jurusan):
+    """Get list of mata kuliah that have tasks/materials for this jurusan"""
+    conn = get_connection()
+    c = conn.cursor()
     
-    rows = get_all_answers()
-    if rows:
-        # Convert to proper dataframe format
-        import pandas as pd
-        df = pd.DataFrame(rows, columns=[
-            "Answer ID", 
-            "Task ID", 
-            "Task Title", 
-            "Username", 
-            "Answer", 
-            "Score", 
-            "Feedback", 
-            "Submitted At"
-        ])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    # Get from BOTH tasks AND materials
+    c.execute("SELECT DISTINCT mata_kuliah FROM tasks UNION SELECT DISTINCT mata_kuliah FROM materials")
+    all_mk = [row[0] for row in c.fetchall()]
+    
+    conn.close()
+    
+    # Filter by jurusan
+    available_mk = []
+    for mk in all_mk:
+        # Check if any task OR material in this MK targets this jurusan
+        tasks = get_tasks_by_mata_kuliah_jurusan(mk, jurusan)
+        materials = get_materials_by_mata_kuliah_jurusan(mk, jurusan)
+        if tasks or materials:  # ✅ Cek keduanya
+            available_mk.append(mk)
+    
+    return available_mk
+
+def materials_page_student(user):
+    """Student page to view materials"""
+    jurusan = user[5]
+    
+    st.header("📚 Materi Tambahan")
+    
+    available_mk = get_available_mata_kuliah_for_student(jurusan)
+    
+    if not available_mk:
+        st.info("Belum ada materi tersedia untuk jurusan Anda")
+        return
+    
+    selected_mk = st.selectbox("Pilih Mata Kuliah", available_mk)
+    
+    st.markdown("---")
+    
+    materials = get_materials_by_mata_kuliah_jurusan(selected_mk, jurusan)
+    
+    if materials:
+        for mat in materials:
+            mat_id, title, link, _, target_jurusan, created_by, created_at = mat
+            
+            with st.expander(f"📌 {title}", expanded=False):
+                st.write(f"**Link:** [{link}]({link})")
+                st.caption(f"Dibuat oleh: {created_by}")
+                
+                # Auto-embed YouTube videos
+                if "youtube.com" in link or "youtu.be" in link:
+                    st.video(link)
+                else:
+                    st.info("Klik link di atas untuk membuka materi")
     else:
-        st.info("Belum ada jawaban")
+        st.info("Belum ada materi untuk mata kuliah ini")
 
 def student_tasks_page(user):
-    """Student view & submit tasks"""
+    """Student page to view and submit tasks"""
+    jurusan = user[5]
+    
     st.header("📚 Tugas Saya")
     
-    tasks = get_all_tasks()
+    available_mk = get_available_mata_kuliah_for_student(jurusan)
+    
+    if not available_mk:
+        st.info("Belum ada tugas tersedia untuk jurusan Anda")
+        return
+    
+    selected_mk = st.selectbox("Pilih Mata Kuliah", available_mk)
+    
+    st.markdown("---")
+    
+    tasks = get_tasks_by_mata_kuliah_jurusan(selected_mk, jurusan)
+    
     if not tasks:
-        st.info("Belum ada tugas tersedia")
+        st.info("Belum ada tugas untuk mata kuliah ini")
         return
     
     for t in tasks:
-        tid, title, desc, correct, created_by, created_at, deadline = t
+        tid, title, desc, _, target_jurusan, created_by, created_at, deadline = t
         
         with st.expander(f"📝 {title}", expanded=False):
             st.markdown(f"**Deskripsi:** {desc}")
@@ -500,70 +941,104 @@ def student_tasks_page(user):
                 st.write(f"⏰ **Deadline:** {deadline}")
             st.caption(f"Dibuat oleh: {created_by}")
             
-            # Check if already answered
-            if user_answer_exists(user[0], tid):
-                st.success("✅ Anda sudah menjawab soal ini")
+            st.markdown("---")
+            
+            # Get or create answer
+            answer_data = get_or_create_answer(user[0], user[1], tid)
+            answer_id, answer_text, status, submitted_at, finalized_at = answer_data
+            
+            if status == "submitted":
+                st.success("✅ Tugas ini sudah diselesaikan")
+                st.info(f"**Jawaban Anda:** {answer_text}")
+                st.caption(f"Difinalisasi pada: {finalized_at}")
                 
-                # Show their answer
+                # Show score if graded
                 conn = get_connection()
                 c = conn.cursor()
-                c.execute("SELECT answer, score, feedback, submitted_at FROM answers WHERE user_id=? AND task_id=?", 
-                         (user[0], tid))
+                c.execute("SELECT score, feedback FROM answers WHERE id=?", (answer_id,))
                 r = c.fetchone()
                 conn.close()
                 
-                if r:
-                    st.info(f"**Jawaban Anda:** {r[0]}")
-                    st.metric("Score", f"{r[1]}/100" if r[1] is not None else "Belum dinilai")
-                    if r[2]:
-                        st.write(f"**Feedback:** {r[2]}")
-                    st.caption(f"Submitted: {r[3]}")
-            else:
-                # Submit form
-                with st.form(f"submit_{tid}"):
-                    user_answer = st.text_area("Jawaban Anda", key=f"input_{tid}")
-                    submit_btn = st.form_submit_button("📤 Kirim Jawaban")
+                if r and r[0] is not None:
+                    st.metric("Score", f"{r[0]}/100")
+                    if r[1]:
+                        st.write(f"**Feedback:** {r[1]}")
+                else:
+                    st.info("Menunggu penilaian dari dosen")
+            
+            else:  # draft
+                st.info("📝 Status: Draft (belum diselesaikan)")
+                
+                with st.form(f"task_{tid}"):
+                    user_answer = st.text_area(
+                        "Jawaban Anda", 
+                        value=answer_text,
+                        key=f"input_{tid}",
+                        height=150
+                    )
                     
-                    if submit_btn:
-                        if not user_answer.strip():
-                            st.error("Jawaban tidak boleh kosong")
-                        else:
-                            # Auto scoring jika ada correct answer (0-100)
-                            auto_score = None
-                            if correct and correct.strip():
-                                # Exact match case-insensitive = 100, else 0
-                                if user_answer.strip().lower() == correct.strip().lower():
-                                    auto_score = 100
-                                else:
-                                    auto_score = 0
-                            
-                            submit_answer(user[0], user[1], tid, user_answer, auto_score)
-                            
-                            if auto_score is not None:
-                                st.success(f"✅ Jawaban tersimpan! Nilai otomatis: {auto_score}/100")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if st.form_submit_button("💾 Simpan Draft"):
+                            if not user_answer.strip():
+                                st.error("Jawaban tidak boleh kosong")
                             else:
-                                st.success("✅ Jawaban tersimpan. Menunggu penilaian dari dosen.")
-                            st.rerun()
+                                save_answer_draft(answer_id, user_answer)
+                                st.success("✅ Draft tersimpan. Anda masih bisa mengubahnya.")
+                                st.rerun()
+                    
+                    with col2:
+                        if st.form_submit_button("✔️ Selesai & Submit", type="primary"):
+                            if not user_answer.strip():
+                                st.error("Jawaban tidak boleh kosong")
+                            else:
+                                save_answer_draft(answer_id, user_answer)
+                                finalize_answer(answer_id)
+                                st.success("✅ Tugas berhasil diselesaikan dan disubmit!")
+                                st.rerun()
 
 def student_results_page(user):
-    """Student view their results"""
+    """Student page to view results"""
+    jurusan = user[5]
+    
     st.header("📊 Hasil & Nilai Saya")
     
-    my_answers = get_answers_for_user(user[0])
+    available_mk = get_available_mata_kuliah_for_student(jurusan)
+    
+    if not available_mk:
+        st.info("Belum ada hasil tersedia")
+        return
+    
+    selected_mk = st.selectbox("Pilih Mata Kuliah", available_mk)
+    
+    st.markdown("---")
+    
+    my_answers = get_answers_for_user_by_mata_kuliah(user[0], selected_mk)
+    
     if my_answers:
         for ans in my_answers:
-            ans_id, task_title, answer, score, feedback, submitted_at = ans
+            ans_id, task_title, answer, score, feedback, status, submitted_at, finalized_at = ans
             
             with st.expander(f"📝 {task_title}", expanded=False):
+                st.write(f"**Status:** {status}")
                 st.write(f"**Jawaban:** {answer}")
-                st.metric("Score", f"{score}/100" if score is not None else "Belum dinilai")
-                if feedback:
-                    st.info(f"**Feedback:** {feedback}")
-                st.caption(f"Submitted: {submitted_at}")
+                
+                if status == "submitted":
+                    st.caption(f"Submitted: {finalized_at}")
+                    
+                    if score is not None:
+                        st.metric("Score", f"{score}/100")
+                        if feedback:
+                            st.info(f"**Feedback:** {feedback}")
+                    else:
+                        st.warning("Menunggu penilaian dari dosen")
+                else:
+                    st.info("Draft - belum diselesaikan")
     else:
-        st.info("Anda belum mengerjakan tugas apapun")
+        st.info("Belum ada hasil untuk mata kuliah ini")
 
-# MAIN APP
+# ========== MAIN APP ==========
 def main():
     st.set_page_config(page_title="E-Learning System", page_icon="🎓", layout="wide")
     
@@ -571,7 +1046,7 @@ def main():
 
     # Ensure default admin exists
     if not user_exists("admin"):
-        add_user("admin", "admin123", "admin")
+        add_user("admin", "admin123", "admin", "Admin", "", "")
 
     # Session init
     if "user" not in st.session_state:
@@ -585,31 +1060,38 @@ def main():
     # User logged in
     user = st.session_state["user"]
     role = user[3]
+    nickname = user[4] or user[1]
 
     # Sidebar
     st.sidebar.title("🎓 E-Learning")
-    st.sidebar.write(f"👤 **{user[1]}**")
+    st.sidebar.write(f"👤 **{nickname}**")
     st.sidebar.caption(f"Role: {role}")
+    
+    if role == "student":
+        st.sidebar.caption(f"Jurusan: {user[5]}")
+    elif role == "lecturer":
+        st.sidebar.caption(f"Mata Kuliah: {user[6]}")
+    
     st.sidebar.markdown("---")
 
     # Menu based on role
     if role == "admin":
-        menu = st.sidebar.radio("📍 Navigasi", [
+        menu = st.sidebar.radio("🧭 Navigasi", [
             "Dashboard",
-            "📚 Materi Tambahan",
             "👥 Manajemen User",
+            "📚 Manajemen Materi",
             "📝 Manajemen Tugas",
             "📊 Semua Jawaban"
         ])
     elif role == "lecturer":
-        menu = st.sidebar.radio("📍 Navigasi", [
+        menu = st.sidebar.radio("🧭 Navigasi", [
             "Dashboard",
             "📚 Materi Tambahan",
             "📝 Manajemen Tugas",
-            "✍️ Penilaian Jawaban"
+            "✏️ Penilaian Jawaban"
         ])
     else:  # student
-        menu = st.sidebar.radio("📍 Navigasi", [
+        menu = st.sidebar.radio("🧭 Navigasi", [
             "Dashboard",
             "📚 Materi Tambahan",
             "📚 Tugas Saya",
@@ -624,44 +1106,49 @@ def main():
     if menu == "Dashboard":
         dashboard_page(user)
     
-    elif menu == "📚 Materi Tambahan":
-        if role in ("admin", "lecturer"):
-            materials_page_lecturer(user)
-        else:
-            materials_page_student()
-    
     elif menu == "👥 Manajemen User":
         if role == "admin":
-            manage_users_page()
+            manage_users_admin_page()
+        else:
+            st.error("🚫 Hanya admin yang dapat mengakses halaman ini")
+    
+    elif menu == "📚 Manajemen Materi":
+        if role == "admin":
+            manage_materials_admin_page()
         else:
             st.error("🚫 Hanya admin yang dapat mengakses halaman ini")
     
     elif menu == "📝 Manajemen Tugas":
-        if role in ("admin", "lecturer"):
-            manage_tasks_page(user)
+        if role == "admin":
+            manage_tasks_admin_page()
+        elif role == "lecturer":
+            manage_tasks_lecturer_page(user)
         else:
             st.error("🚫 Hanya admin/lecturer yang dapat mengakses halaman ini")
     
-    elif menu == "✍️ Penilaian Jawaban":
-        if role in ("admin", "lecturer"):
-            grade_answers_page(user)
+    elif menu == "✏️ Penilaian Jawaban":
+        if role == "lecturer":
+            grade_answers_lecturer_page(user)
         else:
-            st.error("🚫 Hanya admin/lecturer yang dapat mengakses halaman ini")
+            st.error("🚫 Hanya lecturer yang dapat mengakses halaman ini")
     
     elif menu == "📊 Semua Jawaban":
         if role == "admin":
-            view_all_answers_page()
+            view_all_answers_admin_page()
         else:
             st.error("🚫 Hanya admin yang dapat mengakses halaman ini")
+    
+    elif menu == "📚 Materi Tambahan":
+        if role == "student":
+            materials_page_student(user)
+        elif role == "lecturer":
+            materials_page_lecturer(user)
     
     elif menu == "📚 Tugas Saya":
         student_tasks_page(user)
     
     elif menu == "📊 Hasil & Nilai":
         student_results_page(user)
-    
-    else:
-        st.info("Menu belum diimplementasikan")
 
 if __name__ == "__main__":
     main()
